@@ -1,0 +1,3 @@
+ml_item_id,title,price,sold_quantity,available_quantity,free_shipping,condition,category_name,seller_nickname,posicao_patrocinado,vendas_ultimos_30_dias
+MLB1234567890,Fone de Ouvido Bluetooth XYZ,89.90,1500,50,True,new,Fones de Ouvido,LOJA EXEMPLO,2,320
+MLB1234567891,Fone de Ouvido Bluetooth ABC,79.90,800,30,True,new,Fones de Ouvido,OUTRA LOJA,5,150
