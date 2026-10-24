@@ -106,9 +106,16 @@ def _ranking(session: Session) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _best_sellers(session: Session) -> pd.DataFrame:
+    from .discovery import list_opportunities
+
+    return pd.DataFrame(list_opportunities(session))
+
+
 def export_to_excel(session: Session, output_path: str) -> None:
     sheets = {
         "Ranking": _ranking(session),
+        "Mais vendidos": _best_sellers(session),
         "Anuncios (atual)": _latest_snapshot_per_listing(session),
         "Historico de Precos": _price_history(session),
         "Produtos Fornecedor": _supplier_products(session),

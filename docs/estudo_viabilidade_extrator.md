@@ -137,6 +137,30 @@ Para ajustar sem mexer no código, crie `data/taxas.json` (exemplo em
 `fees.py`). Imposto padrão 6% (`DEFAULT_TAX_RATE` no `.env` ou coluna
 "imposto" na planilha).
 
+## Garimpo reverso (mais vendidos -> fornecedor)
+
+Fluxo: `categories` (descobre ids) -> `reverse` (grava os mais vendidos da
+categoria com fonte `mais_vendidos_ml`/`mais_vendidos_shopee` e
+`extra_data {"categoria", "rank"}`, e procura cada um no fornecedor) ->
+`opportunities` / `dashboard` (status encontrado/não encontrado, custo no
+fornecedor e lucro por unidade vendendo no preço do anúncio).
+
+| Etapa | Fonte | Situação |
+|---|---|---|
+| Categorias ML | API `/sites/MLB/categories` e `/categories/{id}` | estável, exige token |
+| Categorias Shopee | `shopee.com.br/api/v4/pages/get_category_tree` no navegador logado | **não validado ao vivo**; parser procura qualquer lista com `catid` |
+| Mais vendidos ML | API `/highlights/MLB/category/{id}` | exige token |
+| Mais vendidos ML (sem token) | página `mercadolivre.com.br/mais-vendidos/{categoria}` | **não validado ao vivo**; reaproveita o parser de cards `poly-card`; id pode ser de catálogo (`/p/MLB...`) |
+| Mais vendidos Shopee | `shopee.com.br/x-cat.{catid}?sortBy=sales` (JSON interceptado) | **não validado ao vivo** |
+| Busca no fornecedor | `search_url` com `{q}` + seletores / JSON-LD / heurística de preço R$ | heurística; sites diferentes podem exigir `--selectors` |
+
+Casamento: similaridade do `matcher` (fração das palavras do termo presentes
+no título, com penalidade quando o código de modelo difere) entre o produto
+do catálogo e o título do anúncio. Na busca do site, o termo é o título sem
+palavras de marketing (`query_from_title`) e o resultado aceito é o de maior
+similaridade acima do limite. Revise os vínculos antes de comprar: título
+parecido não garante que é o mesmo produto (cor, voltagem, kit).
+
 ## Fontes
 
 - [Avante Pro, site oficial](https://avantpro.com.br/)

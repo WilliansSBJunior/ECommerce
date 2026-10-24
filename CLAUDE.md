@@ -9,7 +9,7 @@ por produto e gera um dashboard HTML com os produtos mais promissores.
 - A sessao principal deve DELEGAR para os agentes em `.claude/agents/` em vez
   de rodar os comandos ela mesma. Cada agente declara seu modelo:
   - **haiku**: `coletor-ml`, `extrator-navegador`, `importador-dados`,
-    `cadastro-fornecedor`, `relatorio` (so executam comandos da CLI).
+    `cadastro-fornecedor`, `relatorio`, `garimpo-reverso` (so executam comandos da CLI).
   - **sonnet**: `analista-viabilidade` (interpreta o ranking), `orquestrador`
     (roda o ciclo completo).
   - **opus**: `dev-manutencao` (unico que edita codigo).
@@ -30,6 +30,11 @@ por produto e gera um dashboard HTML com os produtos mais promissores.
 | `trends [--category MLBxxxx]` | termos em alta no ML |
 | `research --all` / `--product-id N` | coleta pelos termos de cada produto do fornecedor e vincula |
 | `scrape --marketplace ml\|shopee\|tiktok --query "termo"` | extrator via navegador logado (so na maquina do usuario) |
+| `categories --marketplace ml\|shopee [--parent ID]` | lista categorias (ML via API; Shopee via navegador, ou `--file` com o JSON salvo) |
+| `reverse --marketplace ml\|shopee (--category ID \| --url URL) [--source api\|scrape] [--supplier-id N] [--threshold 0.6]` | garimpo reverso: mais vendidos da categoria -> procura no catalogo/site do fornecedor |
+| `opportunities [--marketplace] [--category] [--only-missing] [--csv x.csv]` | mais vendidos com status no fornecedor, custo e lucro/un |
+| `supplier-site --supplier-id N --search-url "https://site/busca?q={q}" [--selectors '{json}'] [--test termo]` | configura/testa a busca no site do fornecedor |
+| `supplier-login --supplier-id N` | abre o site do fornecedor no navegador para logar |
 | `import-csv --file x.csv --source avante_pro` | importa export de ferramenta paga |
 | `match-products` | vincula produtos do fornecedor a anuncios ja coletados |
 | `link-product` / `unlink-product` | vinculo manual |
@@ -46,6 +51,7 @@ por produto e gera um dashboard HTML com os produtos mais promissores.
 - `scraper.py` Playwright (ML/Shopee/TikTok), SELECTORS centralizados
 - `suppliers_import.py` importa planilha | `matcher.py` vinculo automatico
 - `fees.py` taxas por marketplace (override em `data/taxas.json`) | `scoring.py` indicadores e score
+- `discovery.py` garimpo reverso (mais vendidos, casamento, list_opportunities) | `supplier_search.py` busca no site do fornecedor
 - `dashboard.py` gera HTML | `exporter.py` Excel | `cli.py` comandos
 - `tests/` pytest | `docs/estudo_viabilidade_extrator.md` estudo e formulas
 

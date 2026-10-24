@@ -43,6 +43,11 @@ class Supplier(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     contact: Mapped[str | None] = mapped_column(String(255))
     notes: Mapped[str | None] = mapped_column(Text)
+    # Garimpo reverso: URL de busca do site do fornecedor com "{q}" no lugar do
+    # termo (ex: https://site.com/busca?q={q}) e seletores CSS opcionais
+    # {"item", "title", "price", "link"} quando a heuristica generica nao basta.
+    search_url: Mapped[str | None] = mapped_column(String(1000))
+    selectors: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     products: Mapped[list["SupplierProduct"]] = relationship(back_populates="supplier")

@@ -198,7 +198,9 @@ def cmd_import_suppliers(args) -> None:
 
 def cmd_add_supplier(args) -> None:
     with _session() as s:
-        supplier = Supplier(name=args.name, contact=args.contact, notes=args.notes)
+        if args.search_url and "{q}" not in args.search_url:
+            _fail("--search-url precisa ter {q} no lugar do termo, ex: https://site.com/busca?q={q}")
+        supplier = Supplier(name=args.name, contact=args.contact, notes=args.notes, search_url=args.search_url)
         s.add(supplier)
         s.flush()
         print(f"Fornecedor criado com id={supplier.id}: {supplier.name}")
@@ -217,6 +219,213 @@ def cmd_add_supplier_product(args) -> None:
         s.add(product)
         s.flush()
         print(f"Produto criado com id={product.id}: {product.name}")
+
+
+def cmd_supplier_site(args) -> None:
+    selectors = None
+    if args.selectors:
+        try:
+            selectors = json.loads(args.selectors)
+        except ValueError as exc:
+            _fail(f"--selectors nao e JSON valido: {exc}")
+        if not isinstance(selectors, dict) or not selectors.get("item"):
+            _fail('--selectors precisa ser um objeto com pelo menos "item", ex: {"item": "div.produto", "title": "a.nome", "price": ".preco", "link": "a.nome"}')
+    if args.search_url and "{q}" not in args.search_url:
+        _fail("--search-url precisa ter {q} no lugar do termo, ex: https://site.com/busca?q={q}")
+    with _session() as s:
+        supplier = s.get(Supplier, args.supplier_id)
+        if supplier is None:
+            _fail(f"Fornecedor id={args.supplier_id} nao encontrado.")
+        if args.search_url:
+            supplier.search_url = args.search_url
+        if args.selectors is not None:
+            supplier.selectors = selectors
+        if args.clear_selectors:
+            supplier.selectors = None
+        print(f"Fornecedor {supplier.id} ({supplier.name}): busca={supplier.search_url or '-'} seletores={json.dumps(supplier.selectors, ensure_ascii=False) if supplier.selectors else '-'}")
+        if args.test:
+            from . import supplier_search
+
+            try:
+                results = supplier_search.search_supplier(supplier, args.test, use_browser=not args.no_browser)
+            except Exception as exc:
+                _fail(f"ERRO na busca do fornecedor: {type(exc).__name__}: {exc}")
+            print(f"Teste '{args.test}': {len(results)} resultados (HTML bruto em data/raw/)")
+            for r in results[:10]:
+                price = _fmt_money(r["price"]) if r["price"] is not None else "sem preco"
+                print(f"  {price:>12}  {r['title'][:60]}  {r['url'] or ''}")
+
+
+def cmd_supplier_login(args) -> None:
+    from . import supplier_search
+
+    with _session() as s:
+        supplier = s.get(Supplier, args.supplier_id)
+        if supplier is None:
+            _fail(f"Fornecedor id={args.supplier_id} nao encontrado.")
+        if not supplier.search_url:
+            _fail(f"Fornecedor {supplier.id} sem search_url. Rode: supplier-site --supplier-id {supplier.id} --search-url 'https://site.com/busca?q={{q}}'")
+        s.expunge(supplier)
+    supplier_search.login_supplier(supplier)
+    print("Sessao salva no perfil do navegador (data/browser_profile).")
+
+
+# ---------------------------------------------------------------- garimpo reverso
+def cmd_categories(args) -> None:
+    from . import scraper
+
+    if args.marketplace == "ml":
+        from . import ml_api
+
+        if args.parent:
+            cat = _ml_call(ml_api.get_category, args.parent)
+            print(f"{cat.get('id')} {cat.get('name')} -> subcategorias:")
+            rows = cat.get("children_categories") or []
+        else:
+            rows = _ml_call(ml_api.get_site_categories)
+        for c in rows:
+            total = c.get("total_items_in_this_category")
+            print(f"{c.get('id'):<12} {c.get('name')}" + (f"  ({total:,} anuncios)".replace(",", ".") if total else ""))
+        print(f"{len(rows)} categorias.")
+        return
+    if args.file:
+        with open(args.file, encoding="utf-8") as fh:
+            cats = scraper.parse_shopee_category_tree(json.load(fh))
+        raw = args.file
+    else:
+        try:
+            cats, raw = scraper.fetch_shopee_category_tree(headless=args.headless)
+        except scraper.ScrapeBlocked as exc:
+            _fail(str(exc))
+    if args.parent:
+        cats = [c for c in cats if c["parent_id"] == str(args.parent)]
+    elif args.level:
+        cats = [c for c in cats if c["level"] == args.level]
+    for c in cats:
+        print(f"{c['id']:<12} {'  ' * (c['level'] - 1)}{c['name']}  (pai: {c['parent_id'] or '-'})")
+    print(f"{len(cats)} categorias." + ("" if cats else f" Nada reconhecido - confira o bruto em {raw}*"))
+
+
+def _fmt_money(v) -> str:
+    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if v is not None else "-"
+
+
+def _fmt_sold(row) -> str:
+    if row.get("sold_30d") is not None:
+        return f"{row['sold_30d']}/mes"
+    return str(row["sold_quantity"]) if row.get("sold_quantity") is not None else "-"
+
+
+def cmd_reverse(args) -> None:
+    from . import discovery, scraper
+
+    if not args.category and not args.url:
+        _fail("Informe --category ID ou --url URL")
+    source = args.source or ("api" if args.marketplace == "ml" else "scrape")
+    if args.marketplace == "shopee" and source == "api":
+        _fail("Shopee nao tem API publica de mais vendidos: use --source scrape (navegador logado).")
+    if source == "api" and args.url:
+        _fail("--url so funciona com --source scrape.")
+    category = args.category or discovery.category_from_url(args.url)
+
+    with _session() as s:
+        supplier = s.get(Supplier, args.supplier_id) if args.supplier_id else None
+        if args.supplier_id and supplier is None:
+            _fail(f"Fornecedor id={args.supplier_id} nao encontrado.")
+        site = bool(supplier and supplier.search_url and not args.no_site_search)
+    need_browser = source == "scrape" or (site and not args.no_browser)
+    pw = ctx = None
+    if need_browser:
+        try:
+            pw, ctx = scraper.open_browser(headless=args.headless)
+        except RuntimeError as exc:
+            _fail(str(exc))
+    try:
+        with _session() as s:
+            if source == "api":
+                from .ml_api import MLAuthError
+
+                try:
+                    listings = discovery.discover_ml_api(s, category, limit=args.limit)
+                except MLAuthError as exc:
+                    _fail(f"ERRO API ML: {exc}\nSem token? Use --source scrape (pagina publica de mais vendidos no navegador logado).")
+                raw = None
+            else:
+                try:
+                    listings, raw = discovery.discover_scrape(
+                        s, args.marketplace, category=category, url=args.url, limit=args.limit,
+                        ctx=ctx, category_name=args.category_name,
+                    )
+                except scraper.ScrapeBlocked as exc:
+                    _fail(str(exc))
+            if args.category_name:
+                for l in listings:
+                    l.category_name = args.category_name
+            rows = discovery.reverse_match(
+                s, listings, supplier_id=args.supplier_id, threshold=args.threshold,
+                site_search=site, ctx=ctx, use_browser=not args.no_browser,
+            )
+    finally:
+        if ctx is not None:
+            ctx.close()
+            pw.stop()
+
+    label = f"{args.marketplace} categoria {category or args.url}"
+    if not rows:
+        _fail(f"{label}: 0 anuncios mais vendidos." + (f" Confira o bruto em {raw}.*" if raw else ""))
+    print(f"{label}: {len(rows)} mais vendidos gravados (fonte {discovery.SOURCES[args.marketplace]}).")
+    hdr = f"{'Rank':>4} | {'Titulo':<60} | {'Preco':>12} | {'Vendidos':>9} | Status"
+    print(hdr)
+    print("-" * (len(hdr) + 30))
+    for r in sorted(rows, key=lambda x: x["rank"] or 10**6):
+        if r["status"] == discovery.STATUS_FOUND:
+            status = f"ENCONTRADO {r['supplier_name']} custo {_fmt_money(r['cost_price'])}" + (" (site)" if r["origin"] == "site" else "")
+        else:
+            status = "NAO ENCONTRADO" + (f" (erro: {r['error']})" if r.get("error") else "")
+        print(f"{r['rank'] or '-':>4} | {r['title'][:60]:<60} | {_fmt_money(r['price']):>12} | {_fmt_sold(r):>9} | {status}")
+    found = sum(1 for r in rows if r["status"] == discovery.STATUS_FOUND)
+    print(f"Encontrados: {found} | Nao encontrados: {len(rows) - found}")
+
+
+OPP_COLUMNS = [
+    ("marketplace", "marketplace"), ("category_id", "categoria"), ("category_name", "nome_categoria"),
+    ("rank", "rank"), ("title", "titulo"), ("permalink", "link"), ("price", "preco"),
+    ("sold_quantity", "vendidos"), ("sold_30d", "vendidos_30d"), ("sales_per_day", "vendas_dia"),
+    ("status", "status"), ("supplier_name", "fornecedor"), ("product_name", "produto_fornecedor"),
+    ("match_score", "similaridade"), ("cost_price", "custo"), ("fee_total", "taxa_marketplace"),
+    ("tax_amount", "imposto"), ("unit_costs", "custo_total"), ("unit_profit", "lucro_un"), ("margin", "margem"),
+]
+
+
+def cmd_opportunities(args) -> None:
+    from .discovery import list_opportunities
+
+    with _session() as s:
+        rows = list_opportunities(s, marketplace=args.marketplace, category=args.category, only_missing=args.only_missing)
+    if not rows:
+        _fail("Nenhum mais vendido no banco com esses filtros. Rode o comando reverse antes.")
+    if args.csv:
+        import csv
+
+        with open(args.csv, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh, delimiter=";")
+            w.writerow([c[1] for c in OPP_COLUMNS])
+            for r in rows:
+                w.writerow([("" if r[k] is None else str(r[k]).replace(".", ",") if isinstance(r[k], float) else r[k]) for k, _ in OPP_COLUMNS])
+        print(f"CSV salvo em {args.csv} ({len(rows)} linhas).")
+        return
+    hdr = f"{'Canal':<6} {'Categoria':<12} {'#':>3} {'Titulo':<44} {'Preco':>11} {'Vendidos':>9} {'Vend/dia':>8} {'Status':<28} {'Custo':>11} {'Lucro/un':>11}"
+    print(hdr)
+    print("-" * len(hdr))
+    for r in rows:
+        status = f"OK {r['supplier_name']}"[:28] if r["found"] else "NAO ENCONTRADO"
+        spd = f"{r['sales_per_day']:.1f}" if r["sales_per_day"] is not None else "-"
+        print(
+            f"{r['marketplace']:<6} {(r['category_id'] or '-')[:12]:<12} {r['rank'] or '-':>3} {r['title'][:44]:<44} "
+            f"{_fmt_money(r['price']):>11} {_fmt_sold(r):>9} {spd:>8} {status:<28} {_fmt_money(r['cost_price']):>11} {_fmt_money(r['unit_profit']):>11}"
+        )
+    found = sum(1 for r in rows if r["found"])
+    print(f"{len(rows)} mais vendidos | encontrados no fornecedor: {found} | nao encontrados: {len(rows) - found}")
 
 
 # ---------------------------------------------------------------- vinculos
@@ -305,10 +514,15 @@ def cmd_score(args) -> None:
 def cmd_dashboard(args) -> None:
     from .dashboard import render_dashboard
 
+    from .discovery import list_opportunities
+
     with _session() as s:
         results = _scores(s, args)
-    path = render_dashboard(results, args.output, strategy=args.strategy)
-    print(f"Dashboard gerado: {path} ({len(results)} linhas). Abra no navegador.")
+        plans = {k: v for k, v in (("ml", args.ml_plan), ("shopee", args.shopee_plan)) if v}
+        opps = list_opportunities(s, plan_by_marketplace=plans)
+    path = render_dashboard(results, args.output, strategy=args.strategy, opportunities=opps or None)
+    extra = f" + {len(opps)} mais vendidos" if opps else ""
+    print(f"Dashboard gerado: {path} ({len(results)} linhas{extra}). Abra no navegador.")
 
 
 def cmd_export_excel(args) -> None:
@@ -324,7 +538,8 @@ def cmd_seed_demo(args) -> None:
         if s.scalar(select(func.count(MLListing.id))) and not args.force:
             _fail("O banco ja tem anuncios. Use outro banco (--db sqlite:///data/demo.db) ou --force.")
         r = seed_demo(s, args.file)
-    print(f"Demo criada: {r['listings']} anuncios ficticios, {r['snapshots']} snapshots.")
+    print(f"Demo criada: {r['listings']} anuncios ficticios, {r['snapshots']} snapshots, "
+          f"{r.get('best_sellers', 0)} mais vendidos ficticios ({r.get('best_sellers_found', 0)} encontrados no fornecedor).")
 
 
 # ---------------------------------------------------------------- parser
@@ -408,7 +623,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", required=True)
     p.add_argument("--contact")
     p.add_argument("--notes")
+    p.add_argument("--search-url", help="Busca do site do fornecedor com {q} no lugar do termo")
     p.set_defaults(func=cmd_add_supplier)
+
+    p = sub.add_parser("supplier-site", help="Configura a busca no site do fornecedor (garimpo reverso).")
+    p.add_argument("--supplier-id", type=int, required=True)
+    p.add_argument("--search-url", help="Ex: https://site.com/busca?q={q}")
+    p.add_argument("--selectors", help='JSON opcional: {"item": "...", "title": "...", "price": "...", "link": "..."}')
+    p.add_argument("--clear-selectors", action="store_true", help="Volta para JSON-LD + heuristica")
+    p.add_argument("--test", metavar="TERMO", help="Faz uma busca de teste e mostra os resultados")
+    p.add_argument("--no-browser", action="store_true", help="Teste via requests (site estatico)")
+    p.set_defaults(func=cmd_supplier_site)
+
+    p = sub.add_parser("supplier-login", help="Abre o site do fornecedor no navegador para voce logar.")
+    p.add_argument("--supplier-id", type=int, required=True)
+    p.set_defaults(func=cmd_supplier_login)
 
     p = sub.add_parser("add-supplier-product", help="Cadastra um produto candidato de um fornecedor.")
     p.add_argument("--supplier-id", type=int, required=True)
@@ -422,6 +651,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--search-terms", help="Termos de busca separados por ';'")
     p.add_argument("--url")
     p.set_defaults(func=cmd_add_supplier_product)
+
+    p = sub.add_parser("categories", help="Lista categorias do ML (API) ou da Shopee (navegador).")
+    p.add_argument("--marketplace", choices=["ml", "shopee"], required=True)
+    p.add_argument("--parent", help="Lista as subcategorias deste id")
+    p.add_argument("--level", type=int, help="Shopee: so este nivel (1 = principais)")
+    p.add_argument("--file", help="Shopee: JSON de get_category_tree ja salvo (offline)")
+    p.add_argument("--headless", action="store_true")
+    p.set_defaults(func=cmd_categories)
+
+    p = sub.add_parser("reverse", help="Garimpo reverso: mais vendidos da categoria -> tem no fornecedor?")
+    p.add_argument("--marketplace", choices=["ml", "shopee"], required=True)
+    p.add_argument("--category", help="Id da categoria (MLBxxxx ou catid da Shopee)")
+    p.add_argument("--url", help="URL pronta (pagina de mais vendidos ou de categoria ordenada por vendas)")
+    p.add_argument("--category-name", help="Nome da categoria para exibir (opcional)")
+    p.add_argument("--source", choices=["api", "scrape"], help="ML: api (padrao, exige token) ou scrape (navegador)")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--supplier-id", type=int, help="So o catalogo/site deste fornecedor (padrao: catalogo de todos)")
+    p.add_argument("--threshold", type=float, default=0.6)
+    p.add_argument("--no-site-search", action="store_true", help="Nao busca no site do fornecedor")
+    p.add_argument("--no-browser", action="store_true", help="Busca no site do fornecedor via requests (site estatico)")
+    p.add_argument("--headless", action="store_true")
+    p.set_defaults(func=cmd_reverse)
+
+    p = sub.add_parser("opportunities", help="Lista os mais vendidos e se o fornecedor tem, com lucro/un.")
+    p.add_argument("--marketplace", choices=["ml", "shopee"])
+    p.add_argument("--category")
+    p.add_argument("--only-missing", action="store_true", help="So os que o fornecedor NAO tem")
+    p.add_argument("--csv", help="Salva em CSV (;) em vez de imprimir")
+    p.set_defaults(func=cmd_opportunities)
 
     p = sub.add_parser("link-product", help="Vincula produto do fornecedor a um anuncio concorrente.")
     p.add_argument("--supplier-product-id", type=int, required=True)

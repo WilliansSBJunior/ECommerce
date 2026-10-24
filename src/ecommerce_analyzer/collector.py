@@ -132,21 +132,31 @@ def collect_by_query(
     return listings
 
 
-def collect_best_sellers(session: Session, category_id: str, source: str = "ml_highlights") -> list[MLListing]:
+def collect_best_sellers(
+    session: Session,
+    category_id: str,
+    source: str = "ml_highlights",
+    limit: int | None = None,
+    category_name: str | None = None,
+) -> list[MLListing]:
     """Grava os mais vendidos da categoria. Itens do tipo PRODUCT (catalogo) sao
-    expandidos para o anuncio vencedor do catalogo."""
+    expandidos para o anuncio vencedor do catalogo. O snapshot guarda
+    extra_data {"categoria": id, "rank": posicao no ranking de mais vendidos}."""
     highlights = ml_api.get_category_highlights(category_id)
     item_ids: list[tuple[str, int]] = []
-    for h in highlights:
+    for idx, h in enumerate(highlights, 1):
+        position = h.get("position") or idx
         if h.get("type") == "ITEM":
-            item_ids.append((h["id"], h.get("position")))
+            item_ids.append((h["id"], position))
         elif h.get("type") in ("PRODUCT", "USER_PRODUCT"):
             try:
                 winners = ml_api.get_product_items(h["id"])
             except ml_api.MLAuthError:
                 winners = []
             if winners:
-                item_ids.append((winners[0].get("item_id") or winners[0].get("id"), h.get("position")))
+                item_ids.append((winners[0].get("item_id") or winners[0].get("id"), position))
+        if limit and len(item_ids) >= limit:
+            break
     details = ml_api.get_items_details_bulk([i for i, _ in item_ids if i])
     listings = []
     for item_id, position in item_ids:
@@ -155,7 +165,10 @@ def collect_best_sellers(session: Session, category_id: str, source: str = "ml_h
             continue
         detail["_position"] = position
         listing_data, snap_data = _normalize_ml_item(detail, detail, None)
-        snap_data["extra_data"] = {"best_seller_category": category_id, "best_seller_position": position}
+        listing_data["category_id"] = listing_data.get("category_id") or category_id
+        if category_name:
+            listing_data["category_name"] = category_name
+        snap_data["extra_data"] = {"categoria": category_id, "rank": position}
         listing = upsert_listing(session, listing_data)
         add_snapshot(session, listing, snap_data, source)
         listings.append(listing)

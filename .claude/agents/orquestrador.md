@@ -27,6 +27,9 @@ falhar, reporte o erro literal e pergunte se continua pulando a etapa.
      e `scrape --marketplace tiktok --all-products` (opcionalmente `ml`).
    - CSV pago: `import-csv --file <arquivo> --source <nome>`.
 4. Vinculos: `match-products` (idempotente).
+4b. (Opcional, so se o usuario pedir garimpo reverso e informar categoria/fornecedor)
+    `reverse --marketplace <ml|shopee> --category <ID> [--supplier-id N]` e depois
+    `opportunities --only-missing`. O dashboard do passo 5 ja inclui a secao "Mais vendidos".
 5. Resultado: `score --top 15` e `dashboard --output dashboard.html`.
 
 ## Resumo final (ate 15 linhas)

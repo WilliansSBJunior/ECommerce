@@ -224,4 +224,13 @@ def get_trends(category_id: str | None = None, site_id: str | None = None) -> li
 
 
 def get_category(category_id: str) -> dict:
+    """Detalhe da categoria: name, path_from_root, children_categories
+    [{id, name, total_items_in_this_category}]."""
     return _get(f"/categories/{category_id}")
+
+
+def get_site_categories(site_id: str | None = None) -> list[dict]:
+    """Categorias de primeiro nivel do site: lista de {id, name}."""
+    site_id = site_id or config.ML_SITE_ID
+    payload = _get(f"/sites/{site_id}/categories")
+    return payload if isinstance(payload, list) else []

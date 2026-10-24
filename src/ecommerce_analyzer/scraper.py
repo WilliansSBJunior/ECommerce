@@ -53,7 +53,17 @@ SELECTORS = {
         # pagina do anuncio
         "pdp_subtitle": "span.ui-pdp-subtitle",
         "pdp_seller": "div.ui-pdp-seller__header__title, span.ui-pdp-seller__label-sold + span, a.ui-pdp-action-modal__link",
+        # pagina publica de mais vendidos (/mais-vendidos/MLBxxxx): os cards sao
+        # os mesmos poly-card da busca; o titulo da pagina traz a categoria.
+        # NAO validado ao vivo (o site pede login a partir do servidor).
+        "best_seller_category": "h1.ui-search-breadcrumb__title, h1",
     },
+}
+
+# Chaves que vao para MLListing (o resto vai para o snapshot).
+LISTING_KEYS = {
+    "id", "marketplace", "title", "category_id", "category_name", "catalog_product_id",
+    "seller_id", "seller_nickname", "permalink", "thumbnail", "currency", "date_created",
 }
 
 ML_ITEM_ID_RE = re.compile(r"(MLB)-?(\d{6,})")
@@ -149,6 +159,30 @@ def parse_ml_search(html: str, query: str | None = None) -> list[dict]:
             }
         )
     return results
+
+
+def parse_ml_best_sellers(html: str, category_id: str | None = None) -> list[dict]:
+    """Le a pagina publica de mais vendidos do ML (/mais-vendidos/MLBxxxx).
+
+    Reaproveita parse_ml_search (cards poly-card). O link pode ser de catalogo
+    (/p/MLB123) em vez do anuncio: o id fica MLB123 e vai tambem para
+    catalog_product_id. `rank` = ordem do card na pagina (1 = mais vendido)."""
+    items = parse_ml_search(html)
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.select_one(SELECTORS["ml"]["best_seller_category"])
+    category_name = _clean(h1.get_text()) if h1 else None
+    if category_name:
+        category_name = re.sub(r"^(Os\s+)?mais vendidos( em| de)?\s*", "", category_name, flags=re.I) or None
+    for rank, item in enumerate(items, 1):
+        item["rank"] = rank
+        item["position"] = rank
+        if item.get("permalink") and re.search(r"/p/MLB\d+", item["permalink"]):
+            item["catalog_product_id"] = item["id"]
+        if category_id:
+            item["category_id"] = category_id
+        if category_name:
+            item["category_name"] = category_name
+    return items
 
 
 def parse_ml_item_page(html: str) -> dict:
@@ -255,6 +289,46 @@ def parse_shopee_payloads(payloads: list, query: str | None = None) -> list[dict
     return results
 
 
+def parse_shopee_category_tree(payload) -> list[dict]:
+    """Extrai a arvore de categorias da Shopee: [{id, name, parent_id, level}].
+
+    Procura (recursivamente, inclusive em "children") dicts com `catid` e
+    `display_name`/`name`. Pensado para a resposta de
+    https://shopee.com.br/api/v4/pages/get_category_tree, que NAO foi validada
+    ao vivo (a Shopee bloqueia o servidor): o formato esperado e
+    {"data": {"category_list": [{"catid", "parent_catid", "name",
+    "display_name", "level", "children": [...]}]}}. Se mudar, a funcao ainda
+    acha qualquer lista de dicts com catid em qualquer nivel do JSON."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def visit(obj, parent_id, level):
+        if isinstance(obj, list):
+            for v in obj:
+                visit(v, parent_id, level)
+            return
+        if not isinstance(obj, dict):
+            return
+        name = obj.get("display_name") or obj.get("name")
+        if obj.get("catid") is not None and isinstance(name, str):
+            cid = str(obj["catid"])
+            parent = obj.get("parent_catid") or obj.get("parent_id")
+            parent = str(parent) if parent not in (None, 0, "0", "") else parent_id
+            lvl = obj.get("level") if isinstance(obj.get("level"), int) else level
+            if cid not in seen:
+                seen.add(cid)
+                out.append({"id": cid, "name": _clean(name), "parent_id": parent, "level": lvl})
+            for v in obj.values():
+                if isinstance(v, (list, dict)):
+                    visit(v, cid, lvl + 1)
+            return
+        for v in obj.values():
+            visit(v, parent_id, level)
+
+    visit(payload, None, 1)
+    return out
+
+
 TIKTOK_ID_KEYS = ("product_id", "productId", "id")
 TIKTOK_TITLE_KEYS = ("title", "product_name", "productName", "name")
 TIKTOK_SOLD_KEYS = ("sold_count", "soldCount", "sold", "sales", "sale_count", "format_sold_count")
@@ -348,6 +422,10 @@ JSON_HINTS = {
     MARKETPLACE_TIKTOK: ("search", "product", "shop"),
 }
 BLOCK_HINTS = ("account-verification", "captcha", "/verify", "login")
+# Garimpo reverso (paginas NAO validadas ao vivo: o site bloqueia o servidor).
+ML_BEST_SELLERS_URL = "https://www.mercadolivre.com.br/mais-vendidos/{categoria}"
+SHOPEE_CATEGORY_URL = "https://shopee.com.br/x-cat.{catid}?sortBy=sales"
+SHOPEE_CATEGORY_TREE_URL = "https://shopee.com.br/api/v4/pages/get_category_tree"
 
 
 class ScrapeBlocked(RuntimeError):
@@ -398,16 +476,23 @@ def login(marketplace: str) -> None:
         pw.stop()
 
 
-def scrape_search(
+def scrape_url(
     marketplace: str,
-    query: str,
+    url: str,
     limit: int = 40,
     headless: bool = False,
     details: bool = False,
     scrolls: int = 6,
     ctx=None,
+    query: str | None = None,
+    parser=None,
+    label: str | None = None,
 ) -> tuple[list[dict], str]:
-    """Abre a busca no navegador e devolve (produtos normalizados, caminho dos brutos)."""
+    """Abre uma URL pronta (busca, categoria, mais vendidos) no navegador e
+    devolve (produtos normalizados, caminho dos brutos).
+
+    parser(html, payloads) -> list[dict] substitui o parser padrao do
+    marketplace (ML = cards da busca, Shopee/TikTok = JSON interceptado)."""
     own = ctx is None
     if own:
         pw, ctx = open_browser(headless=headless)
@@ -427,7 +512,7 @@ def scrape_search(
     try:
         page = ctx.new_page()
         page.on("response", on_response)
-        page.goto(SEARCH_URLS[marketplace](query), wait_until="domcontentloaded", timeout=60000)
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
         if any(h in page.url for h in BLOCK_HINTS):
             raise ScrapeBlocked(
@@ -438,7 +523,9 @@ def scrape_search(
             page.mouse.wheel(0, 2500)
             page.wait_for_timeout(1200)
         html = page.content()
-        if marketplace == MARKETPLACE_ML:
+        if parser is not None:
+            products = parser(html, payloads)
+        elif marketplace == MARKETPLACE_ML:
             products = parse_ml_search(html, query)
         elif marketplace == MARKETPLACE_SHOPEE:
             products = parse_shopee_payloads(payloads, query)
@@ -457,8 +544,53 @@ def scrape_search(
                 except Exception:
                     continue
                 time.sleep(1.0)
-        raw = _save_raw(marketplace, query, html, payloads)
+        raw = _save_raw(marketplace, label or query or url, html, payloads)
+        page.close()
         return products, raw
+    finally:
+        if own:
+            ctx.close()
+            pw.stop()
+
+
+def scrape_search(
+    marketplace: str,
+    query: str,
+    limit: int = 40,
+    headless: bool = False,
+    details: bool = False,
+    scrolls: int = 6,
+    ctx=None,
+) -> tuple[list[dict], str]:
+    """Abre a busca no navegador e devolve (produtos normalizados, caminho dos brutos)."""
+    return scrape_url(
+        marketplace, SEARCH_URLS[marketplace](query), limit=limit, headless=headless,
+        details=details, scrolls=scrolls, ctx=ctx, query=query,
+    )
+
+
+def fetch_shopee_category_tree(ctx=None, headless: bool = False) -> tuple[list[dict], str]:
+    """Abre SHOPEE_CATEGORY_TREE_URL no navegador logado e parseia a arvore.
+
+    Endpoint interno NAO validado ao vivo. Se vier vazio, confira o JSON salvo
+    em data/raw/ e rode `categories --marketplace shopee --file <json>`."""
+    own = ctx is None
+    if own:
+        pw, ctx = open_browser(headless=headless)
+    try:
+        page = ctx.new_page()
+        resp = page.goto(SHOPEE_CATEGORY_TREE_URL, wait_until="domcontentloaded", timeout=60000)
+        payload = None
+        try:
+            payload = resp.json() if resp is not None else None
+        except Exception:
+            try:
+                payload = json.loads(page.inner_text("body"))
+            except Exception:
+                payload = None
+        raw = _save_raw(MARKETPLACE_SHOPEE, "category_tree", None if payload else page.content(), [payload] if payload else [])
+        page.close()
+        return parse_shopee_category_tree(payload or {}), raw
     finally:
         if own:
             ctx.close()
@@ -469,10 +601,7 @@ def store_products(session, products: list[dict], source: str, supplier_product_
     """Grava a saida do extrator no banco (anuncios + snapshots + vinculo opcional)."""
     from .collector import add_snapshot, link, upsert_listing
 
-    listing_keys = {
-        "id", "marketplace", "title", "category_id", "category_name", "catalog_product_id",
-        "seller_id", "seller_nickname", "permalink", "thumbnail", "currency", "date_created",
-    }
+    listing_keys = LISTING_KEYS
     for p in products:
         listing = upsert_listing(session, {k: v for k, v in p.items() if k in listing_keys})
         snap = {k: v for k, v in p.items() if k not in listing_keys}

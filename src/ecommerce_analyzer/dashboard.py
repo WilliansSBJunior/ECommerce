@@ -7,17 +7,24 @@ from .models import MARKETPLACE_LABELS
 from .scoring import ProductScore
 
 
-def build_payload(scores: list[ProductScore], strategy: str) -> dict:
+def build_payload(scores: list[ProductScore], strategy: str, opportunities: list[dict] | None = None) -> dict:
     return {
         "generated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
         "strategy": strategy,
         "labels": MARKETPLACE_LABELS,
         "rows": [s.to_dict() for s in scores],
+        # garimpo reverso (discovery.list_opportunities); vazio = secao escondida
+        "opps": opportunities or [],
     }
 
 
-def render_dashboard(scores: list[ProductScore], output_path: str, strategy: str = "median") -> str:
-    data = json.dumps(build_payload(scores, strategy), ensure_ascii=False, default=str)
+def render_dashboard(
+    scores: list[ProductScore],
+    output_path: str,
+    strategy: str = "median",
+    opportunities: list[dict] | None = None,
+) -> str:
+    data = json.dumps(build_payload(scores, strategy, opportunities), ensure_ascii=False, default=str)
     html = TEMPLATE.replace("__DATA__", data.replace("</", "<\\/"))
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(html)
@@ -113,6 +120,13 @@ tr.detail td{background:var(--surface-2);text-align:left;white-space:normal}
 a{color:var(--s-ml)}
 .empty{padding:40px;text-align:center;color:var(--text-2)}
 .note{color:var(--muted);font-size:12px;margin-top:10px}
+#oppTbl td.opp-title,#oppTbl td.opp-cat,#oppTbl td.opp-st{white-space:normal}
+.opp-title{min-width:200px;max-width:360px;text-align:left}
+.opp-cat{min-width:150px;max-width:200px}
+.opp-st{min-width:190px;max-width:250px}
+.st{display:inline-flex;align-items:center;gap:5px;white-space:normal}
+.st.ok .ic{color:var(--good);font-weight:700} .st.no .ic{color:var(--bad);font-weight:700}
+#oppSection{margin-top:16px}
 .theme{background:none;border:1px solid var(--border);color:var(--text-2);border-radius:8px;padding:4px 10px;cursor:pointer;font:inherit}
 @media (min-width:980px){.grid2{grid-template-columns:3fr 2fr}}
 </style>
@@ -157,6 +171,14 @@ a{color:var(--s-ml)}
     <div class="sub">Clique numa linha para ver custos, taxas e os anúncios concorrentes usados no cálculo. Clique no cabeçalho para ordenar.</div>
     <div class="table-wrap"><table id="tbl"><thead></thead><tbody></tbody></table></div>
     <div class="note" id="note"></div>
+  </section>
+
+  <section class="card" id="oppSection" hidden>
+    <h2>Mais vendidos por categoria</h2>
+    <div class="sub">Garimpo reverso: os anúncios mais vendidos de cada categoria e se o seu fornecedor tem o produto. Clique no cabeçalho para ordenar.</div>
+    <div class="filters" style="margin:10px 0 6px" role="group" aria-label="Filtrar por status no fornecedor" id="oppChips"></div>
+    <div class="table-wrap"><table id="oppTbl"><thead></thead><tbody></tbody></table></div>
+    <div class="note">Lucro/un simulado vendendo no preço do anúncio: preço − taxa do marketplace − imposto − custo no fornecedor − frete − embalagem. Fornecedor = vínculo com maior similaridade; confira se é o mesmo produto antes de comprar.</div>
   </section>
 </div>
 
@@ -421,6 +443,85 @@ a{color:var(--s-ml)}
       : "Sem dados ainda. Importe a tabela de fornecedores, colete concorrentes e rode o comando dashboard de novo.";
   }
   render();
+
+  // ---------- mais vendidos (garimpo reverso) ----------
+  var OPPS = DATA.opps || [];
+  var opp = {filter:"all", sort:"rank", dir:1};
+  var OCOLS=[
+    {k:"rank",t:"#"},
+    {k:"marketplace",t:"Canal",l:true},
+    {k:"category",t:"Categoria",l:true},
+    {k:"title",t:"Anúncio",l:true},
+    {k:"price",t:"Preço"},
+    {k:"sold",t:"Vendidos"},
+    {k:"sales_per_day",t:"Vendas/dia"},
+    {k:"found",t:"Status no fornecedor",l:true},
+    {k:"cost_price",t:"Custo fornecedor"},
+    {k:"unit_profit",t:"Lucro/un"}
+  ];
+  function oppVal(r,k){
+    if(k==="category") return r.category_name||r.category_id||"";
+    if(k==="sold") return r.sold_quantity!=null? r.sold_quantity : (r.sold_30d!=null? r.sold_30d : null);
+    if(k==="found") return r.found? 1 : 0;
+    return r[k];
+  }
+  function oppChips(){
+    var nFound=OPPS.filter(function(r){return r.found}).length;
+    var opts=[["all","Todos",OPPS.length],["found","Encontrados",nFound],["missing","Não encontrados",OPPS.length-nFound]];
+    var box=document.getElementById("oppChips"); box.innerHTML="";
+    opts.forEach(function(o){
+      var b=document.createElement("button"); b.type="button"; b.className="chip";
+      b.setAttribute("aria-pressed", opp.filter===o[0]?"true":"false");
+      b.textContent=o[1]+" ("+o[2]+")";
+      b.onclick=function(){opp.filter=o[0]; oppChips(); renderOpps()};
+      box.appendChild(b);
+    });
+  }
+  function renderOpps(){
+    var head=document.querySelector("#oppTbl thead");
+    head.innerHTML="<tr>"+OCOLS.map(function(c){
+      var arrow= opp.sort===c.k ? (opp.dir<0?" ▼":" ▲") : "";
+      return '<th class="'+(c.l?"l":"")+'" data-k="'+c.k+'" scope="col">'+c.t+arrow+'</th>'}).join("")+"</tr>";
+    head.querySelectorAll("th").forEach(function(th){ th.onclick=function(){
+      var k=th.getAttribute("data-k"); if(opp.sort===k) opp.dir*=-1; else {opp.sort=k; opp.dir=(k==="rank"||k==="marketplace"||k==="category"||k==="title")?1:-1;} renderOpps(); }});
+    var list=OPPS.filter(function(r){return opp.filter==="all" || (opp.filter==="found"? r.found : !r.found)});
+    var k=opp.sort, d=opp.dir;
+    function group(r){return r.marketplace+"|"+(r.category_name||r.category_id||"")}
+    list=list.slice().sort(function(a,b){
+      var c;
+      if(k==="rank"){ c=group(a).localeCompare(group(b)); if(c) return c; }  // rank só faz sentido dentro da categoria
+      var va=oppVal(a,k), vb=oppVal(b,k);
+      if(va==null && vb==null) c=0; else if(va==null) return 1; else if(vb==null) return -1;
+      else c=(typeof va==="string"? va.localeCompare(vb) : va-vb)*d;
+      if(c) return c;
+      c=group(a).localeCompare(group(b));
+      return c || ((a.rank||1e6)-(b.rank||1e6));
+    });
+    var tb=document.querySelector("#oppTbl tbody");
+    if(!list.length){ tb.innerHTML='<tr><td colspan="'+OCOLS.length+'" class="empty">Nenhum anúncio com esse filtro.</td></tr>'; return; }
+    tb.innerHTML=list.map(function(r){
+      var title=esc(r.title); if(r.permalink) title='<a href="'+esc(r.permalink)+'" target="_blank" rel="noopener">'+title+'</a>';
+      var sold=num(r.sold_quantity!=null? r.sold_quantity : r.sold_30d);
+      var soldSub=r.sold_30d!=null? '<div class="psub">'+num(r.sold_30d)+' em 30 dias</div>' : "";
+      var st= r.found
+        ? '<span class="st ok"><span class="ic" aria-hidden="true">✔</span><span>encontrado em <b>'+esc(r.supplier_name||"fornecedor")+'</b></span></span><div class="psub">'+esc(r.product_name||"")+(r.match_score!=null?" · similaridade "+pct(r.match_score):"")+'</div>'
+        : '<span class="st no"><span class="ic" aria-hidden="true">✖</span><span>não encontrado</span></span>';
+      return '<tr>'+
+        '<td>'+(r.rank==null?"—":r.rank+"º")+'</td>'+
+        '<td class="l"><span class="badge"><span class="dot" style="background:'+(COLORS[r.marketplace]||"var(--muted)")+'"></span>'+esc(LABELS[r.marketplace]||r.marketplace)+'</span></td>'+
+        '<td class="l opp-cat">'+esc(r.category_name||r.category_id||"—")+(r.category_name&&r.category_id?'<div class="psub">'+esc(r.category_id)+'</div>':"")+'</td>'+
+        '<td class="opp-title">'+title+'</td>'+
+        '<td>'+money(r.price)+'</td>'+
+        '<td>'+sold+soldSub+'</td>'+
+        '<td>'+(r.sales_per_day==null?"—":r.sales_per_day.toLocaleString("pt-BR",{maximumFractionDigits:1}))+'</td>'+
+        '<td class="l opp-st">'+st+'</td>'+
+        '<td>'+money(r.cost_price)+'</td>'+
+        '<td class="'+(r.unit_profit<0?"neg":(r.unit_profit>0?"pos":""))+'">'+money(r.unit_profit)+(r.margin!=null?'<div class="psub">margem '+pct(r.margin)+'</div>':"")+'</td>'+
+        '</tr>';
+    }).join("");
+  }
+  if(OPPS.length){ document.getElementById("oppSection").hidden=false; oppChips(); renderOpps(); }
+
   var rt; window.addEventListener("resize",function(){clearTimeout(rt); rt=setTimeout(function(){var l=filtered(); scatter(l); bars(l)},150)});
 })();
 </script>
