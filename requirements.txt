@@ -3,3 +3,6 @@ requests>=2.31
 pandas>=2.0
 openpyxl>=3.1
 python-dotenv>=1.0
+beautifulsoup4>=4.12
+playwright>=1.45
+pytest>=8.0

@@ -24,6 +24,7 @@ por produto e gera um dashboard HTML com os produtos mais promissores.
 |---|---|
 | `init-db` | cria/migra tabelas (SQLite em `data/ecommerce.db`) |
 | `import-suppliers --file tabela.xlsx` | importa fornecedores e produtos (custo, frete, MOQ, termos de busca) |
+| `ml-auth` / `ml-auth --code X` / `ml-auth --test` | autoriza o app na API do ML e testa o token |
 | `collect --query "termo" --limit 50` | busca anuncios no ML (API oficial, exige token no `.env`) |
 | `collect-best-sellers --category MLBxxxx` | top mais vendidos da categoria (API ML) |
 | `trends [--category MLBxxxx]` | termos em alta no ML |

@@ -1,0 +1,11 @@
+Fornecedor;Produto;SKU;Custo;Frete;MOQ;Palavras-chave;Categoria
+Distribuidora Alfa;Fone Bluetooth TWS i12;ALF-001;R$ 14,90;1,20;50;fone bluetooth i12;Eletronicos
+Distribuidora Alfa;Smartwatch D20;ALF-002;R$ 32,50;1,80;20;smartwatch d20;Eletronicos
+Distribuidora Alfa;Carregador Turbo USB-C 20W;ALF-003;R$ 11,00;0,90;100;carregador turbo usb c 20w;Eletronicos
+Importadora Beta;Garrafa Termica Inox 500ml;BET-010;R$ 18,70;2,10;30;garrafa termica 500ml;Casa
+Importadora Beta;Mini Liquidificador Portatil;BET-011;R$ 27,90;2,50;24;mini liquidificador portatil;Casa
+Importadora Beta;Organizador de Gaveta 6 Divisorias;BET-012;R$ 6,40;0,80;100;organizador gaveta divisorias;Casa
+Importadora Beta;Luminaria LED de Mesa Recarregavel;BET-013;R$ 39,00;3,00;12;luminaria led mesa recarregavel;Casa
+Fornecedor Gama;Escova Secadora 3 em 1;GAM-100;R$ 54,00;3,50;10;escova secadora 3 em 1;Beleza
+Fornecedor Gama;Kit Pinceis Maquiagem 12 pecas;GAM-101;R$ 9,80;0,70;50;kit pinceis maquiagem 12;Beleza
+Fornecedor Gama;Massageador Eletrico Pescoco;GAM-102;R$ 44,90;3,20;10;massageador eletrico pescoco;Beleza

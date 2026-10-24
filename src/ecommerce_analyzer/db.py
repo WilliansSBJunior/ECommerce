@@ -7,13 +7,22 @@ from sqlalchemy.orm import Session, sessionmaker
 from .config import DATABASE_URL
 from .models import Base
 
-if DATABASE_URL.startswith("sqlite:///"):
-    db_path = DATABASE_URL.replace("sqlite:///", "", 1)
-    if db_path and db_path != ":memory:":
-        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+engine = None
+SessionLocal = None
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+def configure(url: str = DATABASE_URL) -> None:
+    """(Re)cria a conexao. A CLI chama com --db para usar outro banco (ex: demo)."""
+    global engine, SessionLocal
+    if url.startswith("sqlite:///"):
+        db_path = url.replace("sqlite:///", "", 1)
+        if db_path and db_path != ":memory:":
+            os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    engine = create_engine(url)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+configure()
 
 
 def _ensure_columns() -> None:

@@ -1,86 +1,110 @@
-# ECommerce — Captura de dados para escolha de produtos (Mercado Livre)
+# ECommerce: garimpo de produtos para marketplaces
 
-Ferramenta para captar dados de anúncios concorrentes no Mercado Livre e cruzar
-com o preço de fornecedores, gerando uma base histórica (banco de dados) e uma
-planilha Excel para análise manual. Os cálculos de viabilidade/margem ficam de
-fora por enquanto — o foco aqui é captura, normalização e armazenamento.
+Cruza a sua tabela de fornecedores com anúncios concorrentes do **Mercado
+Livre, Shopee e TikTok Shop**, estima quanto cada produto vende e quanto
+sobra de lucro depois das taxas, e gera uma página com os produtos mais
+promissores.
 
-## Como os dados fluem
-
-1. **Fornecedores e produtos candidatos** — você cadastra manualmente (custo,
-   frete, MOQ).
-2. **Anúncios concorrentes** — vêm de duas fontes:
-   - **API pública do Mercado Livre** (`collect`): título, preço, vendidos,
-     frete grátis, etc. Sem necessidade de login/token.
-   - **Import de CSV** (`import-csv`): dados exportados de ferramentas pagas
-     (tipo Avante Pro), que têm métricas mais refinadas. Qualquer coluna que
-     não seja reconhecida automaticamente é guardada sem perda em um campo
-     extra (`extra_data`), então nenhuma métrica que sua ferramenta paga
-     forneça é descartada.
-3. Cada coleta gera um **snapshot** (linha de histórico) — o preço de um
-   anúncio ao longo do tempo fica registrado, não é sobrescrito.
-4. Você **vincula** (`link-product`) um produto do fornecedor aos anúncios
-   concorrentes equivalentes, para comparar lado a lado.
-5. **Exporta para Excel** (`export-excel`) quando quiser revisar/filtrar.
+Estudo completo (o que dá para extrair, como Avante Pro e Mercado Turbo
+funcionam, riscos, fórmulas e taxas): [`docs/estudo_viabilidade_extrator.md`](docs/estudo_viabilidade_extrator.md).
 
 ## Instalação
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
+playwright install chromium        # so para o extrator via navegador
+cp .env.example .env               # preencha ML_CLIENT_ID e ML_CLIENT_SECRET
+export PYTHONPATH=src              # Windows: set PYTHONPATH=src
 ```
 
-Por padrão o banco é SQLite local (`data/ecommerce.db`), sem configuração
-nenhuma. Para usar Postgres depois, basta trocar `DATABASE_URL` no `.env`.
-
-## Uso (CLI)
+## Ver funcionando em 1 minuto (dados fictícios)
 
 ```bash
-# Cria as tabelas
-python -m ecommerce_analyzer.cli init-db
-
-# Busca anúncios do ML por um termo e grava preço/vendidos como snapshot
-python -m ecommerce_analyzer.cli collect --query "fone bluetooth" --limit 50
-
-# Importa dados exportados de uma ferramenta paga
-python -m ecommerce_analyzer.cli import-csv --file samples/exemplo_import.csv --source avante_pro
-
-# Cadastra um fornecedor e um produto candidato
-python -m ecommerce_analyzer.cli add-supplier --name "Fornecedor A"
-python -m ecommerce_analyzer.cli add-supplier-product --supplier-id 1 --name "Fone XYZ" --cost-price 25.90 --shipping-cost 3.50
-
-# Vincula o produto do fornecedor a um anúncio concorrente já coletado
-python -m ecommerce_analyzer.cli link-product --supplier-product-id 1 --ml-item-id MLB1234567890
-
-# Exporta tudo para planilha
-python -m ecommerce_analyzer.cli export-excel --output relatorio.xlsx
+python -m ecommerce_analyzer.cli --db sqlite:///data/demo.db seed-demo
+python -m ecommerce_analyzer.cli --db sqlite:///data/demo.db dashboard --output dashboard_demo.html
 ```
 
-Rode `collect` ou `import-csv` periodicamente (sob demanda) para o mesmo
-termo/anúncios — cada execução adiciona um novo snapshot, construindo o
-histórico de preços que alimenta as métricas futuras.
+Abra `dashboard_demo.html` no navegador.
+
+## Fluxo real
+
+```bash
+# 1. Sua tabela de fornecedores (xlsx ou csv). Reconhece colunas como
+#    Fornecedor, Produto, SKU, Custo, Frete, MOQ, Palavras-chave, Imposto.
+python -m ecommerce_analyzer.cli import-suppliers --file minha_tabela.xlsx
+
+# 2a. Concorrentes no Mercado Livre pela API oficial (precisa do token no .env)
+python -m ecommerce_analyzer.cli ml-auth            # uma vez, segue as instrucoes
+python -m ecommerce_analyzer.cli research --all     # busca pelos termos de cada produto e vincula
+
+# 2b. Shopee / TikTok Shop / ML pelo navegador logado (na sua maquina)
+python -m ecommerce_analyzer.cli scrape --marketplace shopee --login        # uma vez: faca login
+python -m ecommerce_analyzer.cli scrape --marketplace shopee --all-products
+python -m ecommerce_analyzer.cli scrape --marketplace tiktok --all-products
+
+# 2c. (opcional) CSV exportado da Avante Pro ou similar
+python -m ecommerce_analyzer.cli import-csv --file export.csv --source avante_pro
+
+# 3. Vinculos automaticos que faltarem + ranking + pagina
+python -m ecommerce_analyzer.cli match-products
+python -m ecommerce_analyzer.cli score --top 20 --details
+python -m ecommerce_analyzer.cli dashboard --output dashboard.html
+```
+
+Rode o passo 2 uma vez por dia. Cada coleta guarda uma foto (snapshot) de
+cada anúncio, e a diferença de vendidos entre as fotos é o que dá a
+estimativa de vendas por dia mais confiável.
+
+## O que o dashboard mostra
+
+- Produtos viáveis, margem média e o melhor lucro mensal esperado.
+- Gráfico de lucro por unidade contra demanda do mercado, por marketplace.
+- Top 10 por lucro mensal esperado.
+- Ranking com score de 0 a 100, lucro por unidade, margem, preço sugerido,
+  unidades por mês no mercado, número de vendedores e alertas. Clicar numa
+  linha abre a conta completa (comissão, taxa fixa, imposto, custo), o preço
+  de equilíbrio e os anúncios concorrentes usados.
+
+Opções: `--strategy p25` simula vender mais barato que 75% dos concorrentes,
+`--ml-plan premium` usa a comissão do anúncio Premium, `--shopee-plan cpf`
+para vendedor pessoa física.
+
+## Agentes (economia de tokens)
+
+O projeto tem agentes em `.claude/agents/`, cada um com o modelo mais barato
+que dá conta da tarefa. Veja `CLAUDE.md` para a política completa.
+
+| Agente | Modelo | Quando usar |
+|---|---|---|
+| `importador-dados` | Haiku | importar tabela de fornecedores ou CSV de ferramenta paga |
+| `coletor-ml` | Haiku | coletar no ML pela API |
+| `extrator-navegador` | Haiku | coletar Shopee/TikTok/ML pelo navegador |
+| `cadastro-fornecedor` | Haiku | cadastro avulso e ajuste de vínculos |
+| `relatorio` | Haiku | status do banco e Excel |
+| `analista-viabilidade` | Sonnet | ranking, dashboard e "o que vale a pena vender" |
+| `orquestrador` | Sonnet | rodar o ciclo inteiro |
+| `dev-manutencao` | Opus | único que altera código (ex: site mudou o layout) |
 
 ## Estrutura
 
 ```
 src/ecommerce_analyzer/
-  config.py      # variáveis de ambiente (banco, site do ML)
-  models.py      # schema: fornecedores, produtos, anúncios, snapshots, vínculos
-  db.py          # engine/sessão do banco
-  ml_api.py      # cliente da API pública do Mercado Livre
-  collector.py   # grava resultados da API como anúncios + snapshots
-  importer.py    # importa CSV de ferramentas pagas (formato flexível)
-  exporter.py    # exporta o banco para Excel (múltiplas abas)
-  cli.py         # comandos de linha de comando
-samples/
-  exemplo_import.csv  # modelo de CSV para import-csv
+  config.py            variaveis de ambiente
+  models.py / db.py    tabelas e migracao leve
+  ml_api.py            API do ML com OAuth
+  collector.py         grava anuncios e snapshots
+  scraper.py           extrator via navegador (ML, Shopee, TikTok)
+  suppliers_import.py  importa a tabela de fornecedores
+  importer.py          importa CSV de ferramenta paga
+  matcher.py           vinculo automatico produto <-> anuncio
+  fees.py              taxas por marketplace
+  scoring.py           lucro, demanda, concorrencia, score
+  dashboard.py         pagina HTML
+  exporter.py          Excel
+  demo.py              dados ficticios
+  cli.py               comandos
+tests/                 python -m pytest -q
+samples/               exemplos de planilha de fornecedores e de CSV
 ```
-
-## Próximos passos (fora do escopo atual)
-
-- Cálculos de viabilidade (margem, giro, saturação de concorrência etc.) —
-  a estrutura de dados já está pronta para receber essas métricas quando
-  você trouxer as fórmulas.
-- Agendamento automático da coleta (hoje é sob demanda).

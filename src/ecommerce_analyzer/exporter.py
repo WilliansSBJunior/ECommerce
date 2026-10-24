@@ -15,11 +15,13 @@ def _latest_snapshot_per_listing(session: Session) -> pd.DataFrame:
         rows.append(
             {
                 "ml_item_id": listing.ml_item_id,
+                "marketplace": listing.marketplace,
                 "title": listing.title,
                 "category_name": listing.category_name,
                 "seller_nickname": listing.seller_nickname,
                 "price": latest.price,
                 "sold_quantity": latest.sold_quantity,
+                "sold_30d": latest.sold_30d,
                 "available_quantity": latest.available_quantity,
                 "free_shipping": latest.free_shipping,
                 "condition": latest.condition,
@@ -92,8 +94,21 @@ def _comparison(session: Session) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _ranking(session: Session) -> pd.DataFrame:
+    from .scoring import score_all
+
+    rows = []
+    for r in score_all(session):
+        d = r.to_dict()
+        d.pop("listings", None)
+        d["flags"] = ", ".join(d["flags"])
+        rows.append(d)
+    return pd.DataFrame(rows)
+
+
 def export_to_excel(session: Session, output_path: str) -> None:
     sheets = {
+        "Ranking": _ranking(session),
         "Anuncios (atual)": _latest_snapshot_per_listing(session),
         "Historico de Precos": _price_history(session),
         "Produtos Fornecedor": _supplier_products(session),

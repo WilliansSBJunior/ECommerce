@@ -7,3 +7,5 @@ data/*.db
 data/*.sqlite3
 *.xlsx
 !samples/*.xlsx
+data/
+dashboard*.html
