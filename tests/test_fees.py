@@ -39,3 +39,19 @@ def test_breakeven_zera_lucro():
     p = breakeven_price("ml", 30, 0.06, tables=T)
     f = marketplace_fee("ml", p, tables=T)
     assert 0 <= p - f.total - p * 0.06 - 30 < 0.2
+
+
+def test_preco_na_lacuna_entre_faixas_cai_na_faixa_de_baixo():
+    # Regressao: 79.995 caia fora de [0, 79.99] e [80, 99.99] -> taxa fixa 0.
+    f = marketplace_fee("shopee", 79.995, tables=T)
+    assert (f.commission_percent, f.fixed_fee) == (0.20, 4.50)
+    assert marketplace_fee("shopee", 79.994, tables=T).fixed_fee == 4.50
+    assert marketplace_fee("shopee", 99.995, tables=T).fixed_fee == 16.0
+
+
+def test_breakeven_shopee_nao_usa_taxa_fixa_zero():
+    p = breakeven_price("shopee", 40, 0.06, tables=T)
+    f = marketplace_fee("shopee", p, tables=T)
+    assert p == round(p, 2)
+    assert f.fixed_fee > 0
+    assert 0 <= p - f.total - p * 0.06 - 40 < 0.05

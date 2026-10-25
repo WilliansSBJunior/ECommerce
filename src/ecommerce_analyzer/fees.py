@@ -13,7 +13,8 @@ FEES_OVERRIDE_FILE) com a mesma estrutura de DEFAULT_FEE_TABLES, por exemplo:
 Cada marketplace tem "planos" (ex: ML classico/premium). Cada plano tem:
   percent: comissao percentual sobre o preco de venda (categoria media)
   bands:   lista [preco_min, preco_max, taxa_fixa] -> taxa fixa por unidade
-           cobrada quando o preco cai na faixa; fora das faixas = 0.
+           cobrada quando o preco cai na faixa; fora das faixas = 0. Lacunas
+           entre uma faixa e a proxima (ex: 79.99 -> 80) contam na faixa de baixo.
   percent_bands (opcional): lista [preco_min, preco_max, percent] quando a
            comissao percentual tambem varia por faixa de preco (Shopee/TikTok).
 """
@@ -93,9 +94,22 @@ def load_fee_tables(override_file: str | None = FEES_OVERRIDE_FILE) -> dict:
 
 
 def _band_value(bands: list, price: float, default: float = 0.0) -> float:
-    for low, high, value in bands or []:
-        high = INF if high in (None, "inf") else high
-        if low <= price <= high:
+    """Valor da faixa em que `price` cai.
+
+    As tabelas usam intervalos fechados com lacuna de centavo (ex: [0, 79.99] e
+    [80, 99.99]). Para nao deixar preco "sem faixa" nessas lacunas, cada faixa
+    vale de `low` ate o `low` da proxima (exclusivo); so a ultima respeita o
+    proprio `high` (acima dele = default).
+    """
+    ordered = sorted(
+        ((low, INF if high in (None, "inf") else high, value) for low, high, value in bands or []),
+        key=lambda b: b[0],
+    )
+    for i, (low, high, value) in enumerate(ordered):
+        if i + 1 < len(ordered):
+            if low <= price < ordered[i + 1][0]:
+                return value
+        elif low <= price <= high:
             return value
     return default
 
@@ -135,7 +149,9 @@ def marketplace_fee(
     mk = tables[marketplace]
     plan = plan or mk.get("_default_plan")
     rule = mk[plan]
-    price = float(price or 0)
+    # Preco real sempre tem 2 casas: trunca para centavos (79.995 -> 79.99,
+    # na faixa de baixo). O round(.., 6) evita ruido de float (59.9*100 = 5989.999..).
+    price = math.floor(round(float(price or 0) * 100, 6)) / 100
 
     percent = rule.get("percent", 0.0)
     if rule.get("percent_bands"):
@@ -174,13 +190,15 @@ def breakeven_price(
     """Menor preco de venda em que o lucro por unidade e zero.
 
     Como a taxa fixa e a comissao mudam por faixa de preco, resolve a equacao
-    por busca incremental (passo de R$0,10) -- simples e sem erro de faixa.
+    por busca incremental em centavos (passo de R$0,01, contado em inteiros
+    para nao acumular erro de float) -- simples e sem erro de faixa.
     """
-    price = max(unit_costs, 1.0)
-    for _ in range(20000):  # ate R$2000 acima do custo
+    tables = tables or load_fee_tables()
+    start_cents = round(max(unit_costs, 1.0) * 100)
+    for step in range(200000):  # ate R$2000 acima do custo
+        price = (start_cents + step) / 100
         fee = marketplace_fee(marketplace, price, plan, percent_override, logistic, tables)
         profit = price - fee.total - price * tax_rate - unit_costs
         if profit >= 0:
-            return round(price, 2)
-        price += 0.10
+            return price
     return None
